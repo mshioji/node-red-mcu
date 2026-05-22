@@ -7,7 +7,8 @@
 			pin: { value:"?", validate: RED.validators.number() },
 			mode: { value:"Input" },
 			edge: { value:"3" },
-			debounce: { value:0 },
+			debounceInterval: { value:10 },
+			debounceCount: { value:5 },
 			initial: { value:false },
 			invert: { value:false },
 			moddable_manifest: {value: {include: "$(NODEREDMCU)/nodes/mcu/digital/manifest.json"}},
@@ -77,11 +78,16 @@
 			See the <a class="" href="https://419.ecma-international.org/#-10-io-classes-digital" target="_blank">ECMA-419 specification</a>.
 		</div>
 		<hr/>
-   </div>
-	<div class="form-row"">
-		<label for="node-input-debounce">Debounce</label>
-		<input type="text" id="node-input-debounce" style="display:inline-block; width:70%; vertical-align:baseline;">
+	</div>
+	<div class="form-row">
+		<label for="node-input-debounceInterval">Debounce interval</label>
+		<input type="number" id="node-input-debounceInterval" style="display:inline-block; width:35%; vertical-align:baseline;" min="1">
 		<span>ms</span>
+	</div>
+	<div class="form-row">
+		<label for="node-input-debounceCount">Stable count</label>
+		<input type="number" id="node-input-debounceCount" style="display:inline-block; width:35%; vertical-align:baseline;" min="1">
+		<span>times</span>
 	</div>
 	<div class="form-row">
 		<label></label>
@@ -139,7 +145,7 @@ If "Invert" is checked in the property editor, the output is 1 for low and 0 for
 
 If "Read initial state of pin on restart?" is checked, a message is output at start-up with the current value of the digital input.
 
-If "Debounce" is set to a non-zero value, that number of milliseconds is waited after an input change is detected to report the reading. This can be useful in filtering out noise in transitions.
+Debounce uses a stable-sample strategy: the pin is polled every **Debounce interval** ms after an edge is detected. Once **Stable count** consecutive reads return the same value, that value is sent. Both the timer and the count reset on each new edge, so chattering that outlasts one poll cycle is still handled correctly. Default: 10 ms interval, 5 consecutive samples (50 ms window).
 </script>
 
 <script type="text/markdown" data-help-name="mcu_digital_out">

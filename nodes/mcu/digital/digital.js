@@ -25,6 +25,9 @@ let cache;		// support multiple nodes sharing the same pin, like the RPi impleme
 
 class DigitalInNode extends Node {
 	#timer;
+	#stableCount = 0;
+	#stableValue = -1;
+	#currentState = -1;
 
 	onStart(config) {
 		super.onStart(config);
@@ -33,19 +36,21 @@ class DigitalInNode extends Node {
 		if (!Digital)
 			return void this.status({fill: "red", shape: "dot", text: "node-red:common.status.error"});
 
-		if (config.debounce)
-			Object.defineProperty(this, "debouce", {value: config.debounce});
+		const interval = (config.debounceInterval > 0) ? config.debounceInterval : 10;
+		const count    = (config.debounceCount    > 0) ? config.debounceCount    :  5;
+		Object.defineProperty(this, "debounceInterval", {value: interval});
+		Object.defineProperty(this, "debounceCount",    {value: count});
 
-		let edge = config.edge;
 		if (config.invert) {
 			Object.defineProperty(this, "invert", {value: 1});
-			edge = ((edge & 1) << 1) | ((edge & 2) >> 1);
 		}
+		const edgeMask = parseInt(config.edge) || 3;
+		Object.defineProperty(this, "edgeMask", {value: edgeMask});
 
 		cache ??= new Map;
 		let io = cache.get(config.pin);
 		if (io) {
-			if ((io.mode !== config.mode) || (io.edge !== edge))
+			if (io.mode !== config.mode)
 				return void this.status({fill: "red", shape: "dot", text: "mismatch"});
 			io.readers.push(this);
 		}
@@ -53,24 +58,12 @@ class DigitalInNode extends Node {
 			io = new Digital({
 				pin: config.pin,
 				mode: Digital[config.mode],
-				edge: ((edge & 1) ? Digital.Rising : 0) + ((edge & 2) ? Digital.Falling : 0),
+				edge: Digital.Rising + Digital.Falling,
 				onReadable() {
-					this.readers.forEach(reader => {
-						reader.#timer ??= Timer.set(() => {
-							reader.#timer = undefined;
-
-							const msg = {
-								payload: this.read() ^ (reader.invert ?? 0),
-								topic: "gpio/" + this.pin
-							};
-							reader.send(msg)
-							reader.status({fill: "green", shape: "dot", text: msg.payload.toString()});
-						}, reader.debounce ?? 0);
-					});
+					this.readers.forEach(reader => reader.#startPolling(this));
 				}
 			});
 			io.mode = config.mode;
-			io.edge = edge;
 			io.pin = config.pin;
 			io.readers = [this];
 			cache.set(config.pin, io);
@@ -84,6 +77,45 @@ class DigitalInNode extends Node {
 			});
 			this.status({fill: "green", shape: "dot", text: payload.toString()});
 		}
+	}
+
+	#startPolling(io) {
+		if (this.#timer !== undefined) {
+			Timer.clear(this.#timer);
+			this.#timer = undefined;
+		}
+		this.#stableCount = 0;
+		this.#stableValue = -1;
+
+		this.#timer = Timer.repeat(() => {
+			const sample = io.read() ^ (this.invert ?? 0);
+
+			if (sample === this.#stableValue) {
+				this.#stableCount++;
+			}
+			else {
+				this.#stableCount = 1;
+				this.#stableValue = sample;
+			}
+
+			if (this.#stableCount >= this.debounceCount) {
+				Timer.clear(this.#timer);
+				this.#timer = undefined;
+				this.#stableCount = 0;
+				this.#stableValue = -1;
+
+				const prev = this.#currentState;
+				const rising  = (prev !== 1 && sample === 1);
+				const falling = (prev !== 0 && sample === 0);
+				this.#currentState = sample;
+
+				this.status({fill: "green", shape: "dot", text: sample.toString()});
+				if ((rising && (this.edgeMask & 1)) || (falling && (this.edgeMask & 2))) {
+					const msg = {payload: sample, topic: "gpio/" + io.pin};
+					this.send(msg);
+				}
+			}
+		}, this.debounceInterval);
 	}
 
 	static type = "mcu_digital_in";
@@ -102,7 +134,7 @@ class DigitalOutNode extends Node {
 			return;
 
 		if (config.invert)
-			Object.defineProperty(this, "invert", {value: 1}); 
+			Object.defineProperty(this, "invert", {value: 1});
 
 		cache ??= new Map;
 		let io = cache.get(config.pin);
