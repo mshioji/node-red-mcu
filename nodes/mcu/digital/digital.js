@@ -89,7 +89,8 @@ class DigitalInNode extends Node {
 
 		this.#timer = Timer.repeat(() => {
 			const sample = io.read() ^ (this.invert ?? 0);
-
+			this.status({fill: "yellow", shape: "dot", text: ""});
+			
 			if (sample === this.#stableValue) {
 				this.#stableCount++;
 			}
