@@ -22,6 +22,7 @@ import {Node} from "nodered";
 import Timer from "timer";
 
 let cache;		// support multiple nodes sharing the same pin, like the RPi implementation
+const DEBOUNCE_INTERVAL = 10;	// polling interval in ms
 
 class DigitalInNode extends Node {
 	#timer;
@@ -36,10 +37,12 @@ class DigitalInNode extends Node {
 		if (!Digital)
 			return void this.status({fill: "red", shape: "dot", text: "node-red:common.status.error"});
 
-		const interval = (config.debounceInterval > 0) ? config.debounceInterval : 10;
-		const count    = (config.debounceCount    > 0) ? config.debounceCount    :  5;
-		Object.defineProperty(this, "debounceInterval", {value: interval});
-		Object.defineProperty(this, "debounceCount",    {value: count});
+		// debounce=0: immediate response (no timer)
+		// debounce=1-9: treated as 10ms, count=1
+		// debounce=10+: interval=10ms, count=round(debounce/10)
+		const debounce = config.debounce ?? 0;
+		const count = debounce > 0 ? Math.max(1, Math.round(debounce / DEBOUNCE_INTERVAL)) : 0;
+		Object.defineProperty(this, "debounceCount", {value: count});
 
 		if (config.invert) {
 			Object.defineProperty(this, "invert", {value: 1});
@@ -87,10 +90,16 @@ class DigitalInNode extends Node {
 		this.#stableCount = 0;
 		this.#stableValue = -1;
 
+		if (this.debounceCount === 0) {
+			// debounce=0: read immediately and send
+			this.#settle(io, io.read() ^ (this.invert ?? 0));
+			return;
+		}
+
 		this.#timer = Timer.repeat(() => {
 			const sample = io.read() ^ (this.invert ?? 0);
 			this.status({fill: "yellow", shape: "dot", text: ""});
-			
+
 			if (sample === this.#stableValue) {
 				this.#stableCount++;
 			}
@@ -104,19 +113,22 @@ class DigitalInNode extends Node {
 				this.#timer = undefined;
 				this.#stableCount = 0;
 				this.#stableValue = -1;
-
-				const prev = this.#currentState;
-				const rising  = (prev !== 1 && sample === 1);
-				const falling = (prev !== 0 && sample === 0);
-				this.#currentState = sample;
-
-				this.status({fill: "green", shape: "dot", text: sample.toString()});
-				if ((rising && (this.edgeMask & 1)) || (falling && (this.edgeMask & 2))) {
-					const msg = {payload: sample, topic: "gpio/" + io.pin};
-					this.send(msg);
-				}
+				this.#settle(io, sample);
 			}
-		}, this.debounceInterval);
+		}, DEBOUNCE_INTERVAL);
+	}
+
+	#settle(io, sample) {
+		const prev = this.#currentState;
+		const rising  = (prev !== 1 && sample === 1);
+		const falling = (prev !== 0 && sample === 0);
+		this.#currentState = sample;
+
+		this.status({fill: "green", shape: "dot", text: sample.toString()});
+		if ((rising && (this.edgeMask & 1)) || (falling && (this.edgeMask & 2))) {
+			const msg = {payload: sample, topic: "gpio/" + io.pin};
+			this.send(msg);
+		}
 	}
 
 	static type = "mcu_digital_in";
